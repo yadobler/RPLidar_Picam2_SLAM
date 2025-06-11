@@ -127,48 +127,48 @@ class MyRPLidar:
         """Ensures the lidar is disconnected when the object is garbage collected."""
         self._disconnect_lidar_internal()
 
-# --- Configuration for Lidar and Plotting ---
-PORT_NAME = '/dev/ttyUSB0'      # !!! IMPORTANT: VERIFY THIS IS YOUR ACTUAL RPLIDAR PORT !!!
-MAX_DISTANCE_MM = 3000          # Max expected distance for plotting (e.g., 3000mm = 3 meters)
-MIN_DISTANCE_MM = 1             # Minimum distance to plot (filter out noise very close to lidar)
-MIN_QUALITY = 2                 # Minimum quality to plot 
-NUM_SCANS_TO_ACCUMULATE = 10    # Number of full scans to accumulate before a single plot update
-
-# --- OpenCV Plotting Parameters ---
-WINDOW_NAME = "RPLidar Scan (OpenCV)"
-IMG_SIZE = 600 
-CENTER_X = IMG_SIZE // 2
-CENTER_Y = IMG_SIZE // 2
-# Scale factor to map lidar distances (mm) to pixels
-# Example: 1 pixel per 5 mm, or 100 pixels per meter.
-# MAX_DISTANCE_MM / (IMG_SIZE / 2 - some_margin)
-PIXELS_PER_MM = (IMG_SIZE / 2 - 20) / MAX_DISTANCE_MM # leave a 20 pixel margin
-
-
-# --- Helper function to convert polar to cartesian and scale for image ---
-def polar_to_pixel(angle_deg, distance_mm, center_x, center_y, pixels_per_mm):
-    """
-    Converts polar coordinates (angle, distance) to Cartesian (x, y) pixels
-    relative to a given center, suitable for OpenCV image drawing.
+if __name__ == '__main__':
+    # --- Configuration for Lidar and Plotting ---
+    PORT_NAME = '/dev/ttyUSB0'      # !!! IMPORTANT: VERIFY THIS IS YOUR ACTUAL RPLIDAR PORT !!!
+    MAX_DISTANCE_MM = 3000          # Max expected distance for plotting (e.g., 3000mm = 3 meters)
+    MIN_DISTANCE_MM = 1             # Minimum distance to plot (filter out noise very close to lidar)
+    MIN_QUALITY = 2                 # Minimum quality to plot 
+    NUM_SCANS_TO_ACCUMULATE = 10    # Number of full scans to accumulate before a single plot update
     
-    Args:
-        angle_deg (float): Angle in degrees (0-360).
-        distance_mm (float): Distance in millimeters.
-        center_x (int): X-coordinate of the image center.
-        center_y (int): Y-coordinate of the image center.
-        pixels_per_mm (float): Scaling factor from millimeters to pixels.
+    # --- OpenCV Plotting Parameters ---
+    WINDOW_NAME = "RPLidar Scan (OpenCV)"
+    IMG_SIZE = 600 
+    CENTER_X = IMG_SIZE // 2
+    CENTER_Y = IMG_SIZE // 2
+    # Scale factor to map lidar distances (mm) to pixels
+    # Example: 1 pixel per 5 mm, or 100 pixels per meter.
+    # MAX_DISTANCE_MM / (IMG_SIZE / 2 - some_margin)
+    PIXELS_PER_MM = (IMG_SIZE / 2 - 20) / MAX_DISTANCE_MM # leave a 20 pixel margin
+    
+    
+    # --- Helper function to convert polar to cartesian and scale for image ---
+    def polar_to_pixel(angle_deg, distance_mm, center_x, center_y, pixels_per_mm):
+        """
+        Converts polar coordinates (angle, distance) to Cartesian (x, y) pixels
+        relative to a given center, suitable for OpenCV image drawing.
         
-    Returns:
-        tuple: (x_pixel, y_pixel)
-    """
-    angle_rad = radians(angle_deg)
-    x = int(center_x + (distance_mm * pixels_per_mm) * sin(angle_rad))
-    y = int(center_y - (distance_mm * pixels_per_mm) * cos(angle_rad)) # Subtract for inverted Y-axis
-    return x, y
+        Args:
+            angle_deg (float): Angle in degrees (0-360).
+            distance_mm (float): Distance in millimeters.
+            center_x (int): X-coordinate of the image center.
+            center_y (int): Y-coordinate of the image center.
+            pixels_per_mm (float): Scaling factor from millimeters to pixels.
+            
+        Returns:
+            tuple: (x_pixel, y_pixel)
+        """
+        angle_rad = radians(angle_deg)
+        x = int(center_x + (distance_mm * pixels_per_mm) * sin(angle_rad))
+        y = int(center_y - (distance_mm * pixels_per_mm) * cos(angle_rad)) # Subtract for inverted Y-axis
+        return x, y
 
 
 # --- Main Execution ---
-if __name__ == '__main__':
     my_lidar = None
     
     cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_AUTOSIZE)
