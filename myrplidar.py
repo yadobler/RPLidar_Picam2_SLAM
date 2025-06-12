@@ -1,7 +1,7 @@
 import time
 from rplidar import RPLidar, RPLidarException
 
-# --- MyRPLidar Class Definition (same as before) ---
+# --- MyRPLidar Class Definition ---
 class MyRPLidar:
     """
     A wrapper class for RPLidar to provide robust connection,
@@ -129,20 +129,17 @@ class MyRPLidar:
 
 if __name__ == '__main__':
     # --- Configuration for Lidar and Plotting ---
-    PORT_NAME = '/dev/ttyUSB0'      # !!! IMPORTANT: VERIFY THIS IS YOUR ACTUAL RPLIDAR PORT !!!
-    MAX_DISTANCE_MM = 3000          # Max expected distance for plotting (e.g., 3000mm = 3 meters)
-    MIN_DISTANCE_MM = 1             # Minimum distance to plot (filter out noise very close to lidar)
-    MIN_QUALITY = 2                 # Minimum quality to plot 
-    NUM_SCANS_TO_ACCUMULATE = 10    # Number of full scans to accumulate before a single plot update
+    PORT_NAME = '/dev/ttyUSB0'     
+    MAX_DISTANCE_MM = 3000         
+    MIN_DISTANCE_MM = 1             
+    MIN_QUALITY = 2                
+    NUM_SCANS_TO_ACCUMULATE = 10   
     
     # --- OpenCV Plotting Parameters ---
     WINDOW_NAME = "RPLidar Scan (OpenCV)"
     IMG_SIZE = 600 
     CENTER_X = IMG_SIZE // 2
     CENTER_Y = IMG_SIZE // 2
-    # Scale factor to map lidar distances (mm) to pixels
-    # Example: 1 pixel per 5 mm, or 100 pixels per meter.
-    # MAX_DISTANCE_MM / (IMG_SIZE / 2 - some_margin)
     PIXELS_PER_MM = (IMG_SIZE / 2 - 20) / MAX_DISTANCE_MM # leave a 20 pixel margin
     
     
