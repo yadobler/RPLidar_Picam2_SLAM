@@ -31,6 +31,14 @@ class Config:
     # A value of 0 means the lidar's 0° mark is dead center.
     LIDAR_CENTER_ANGLE_DEG = 0.0
 
+    # --- Color Strip Preview ---
+    SHOW_COLOR_STRIP = True
+    # The size of the square neighborhood to average colors from (e.g., 5x5 pixels)
+    COLOR_NEIGHBORHOOD_SIZE = 5 
+    # The height of the color preview strip at the top of the screen
+    STRIP_HEIGHT = 40 
+    NUM_COLOR_STRIP_SEGMENTS = int(FOV_DEGREES) # Each degree gets a segment
+
 
 # --- Shared Data ---
 LIDAR_DATA: Dict[int, Dict[str, Any]] = {}
@@ -111,8 +119,12 @@ def main_loop():
 
     cv2.namedWindow("LIDAR + Camera View")
 
-    # Pre-calculate the angles we care about
+    # Pre-calculate the angles we care about for the FOV points
     fov_angles_to_check = get_fov_points(Config.LIDAR_CENTER_ANGLE_DEG, Config.FOV_DEGREES)
+    
+    # Pre-calculate the angles for the fixed color strip segments (-1 because idk)
+    color_strip_angles = get_fov_points(Config.LIDAR_CENTER_ANGLE_DEG, Config.NUM_COLOR_STRIP_SEGMENTS - 1)
+
 
     while True:
         frame = picam2.capture_array()
@@ -120,10 +132,15 @@ def main_loop():
         
         current_time = time.monotonic()
         points_to_draw = []
+        
+        # Initialize preview_colors with a default "no data" color (e.g., black)
+        preview_colors = [(0, 0, 0)] * Config.NUM_COLOR_STRIP_SEGMENTS # BGR black
 
-        # --- Efficiently get and process data ---
+
+        # --- Get and process data ---
         with LIDAR_LOCK:
-            for angle_deg in fov_angles_to_check:
+            # Process points for drawing and for the color strip simultaneously
+            for i, angle_deg in enumerate(color_strip_angles): # Iterate through fixed angles for color strip
                 data_point = LIDAR_DATA.get(angle_deg)
 
                 # Check if point exists and is not stale
@@ -141,6 +158,28 @@ def main_loop():
                     y_screen = int(Config.LIDAR_Y_SLOPE * dist + Config.LIDAR_Y_INTERCEPT)
                     
                     points_to_draw.append(((x_screen, y_screen), dist))
+                    
+                    if Config.SHOW_COLOR_STRIP:
+                        # Ensure the point is within the frame bounds before sampling
+                        if 0 <= x_screen < Config.IMAGE_WIDTH and 0 <= y_screen < Config.IMAGE_HEIGHT:
+                            half_N = Config.COLOR_NEIGHBORHOOD_SIZE // 2
+                            
+                            # Define the boundaries of the neighborhood, clamping to image edges
+                            y_start = max(0, y_screen - half_N)
+                            y_end = min(Config.IMAGE_HEIGHT, y_screen + half_N + 1)
+                            x_start = max(0, x_screen - half_N)
+                            x_end = min(Config.IMAGE_WIDTH, x_screen + half_N + 1)
+                            
+                            # Extract the neighborhood and calculate the mean color
+                            neighborhood = frame[y_start:y_end, x_start:x_end]
+                            if neighborhood.size > 0:
+                                # Calculate mean across all pixels in the neighborhood (axis=(0,1))
+                                avg_color = np.mean(neighborhood, axis=(0, 1))
+                                # Get the correct index since the numbers start from center, not left side
+                                correct_index = (i + Config.NUM_COLOR_STRIP_SEGMENTS // 2) % Config.NUM_COLOR_STRIP_SEGMENTS
+                                # Convert to integer tuple for drawing (BGR)
+                                preview_colors[correct_index] = tuple(avg_color.astype(int))
+
 
         # --- Drawing Loop (Lock is released) ---
         for (x, y), dist in points_to_draw:
@@ -151,8 +190,25 @@ def main_loop():
                 # Color mapping based on distance
                 norm = np.clip((dist - Config.MIN_DISTANCE_MM) / (Config.MAX_DISTANCE_MM - Config.MIN_DISTANCE_MM), 0, 1)
                 color = (0, int(norm * 255), int((1 - norm) * 255)) # BGR: Green (close) to Red (far)
-
                 cv2.circle(frame, (x, y_clipped), 3, color, -1)
+
+        if Config.SHOW_COLOR_STRIP: 
+            num_colors = Config.NUM_COLOR_STRIP_SEGMENTS
+            box_width = Config.IMAGE_WIDTH / num_colors
+            
+            for i, color in enumerate(preview_colors):
+                # The color from np.mean is BGR, which is what cv2 expects
+                # Already an integer tuple from the assignment `tuple(avg_color.astype(int))`
+                bgr_color = (int(color[0]), int(color[1]), int(color[2])) 
+                
+                # Calculate the top-left and bottom-right corners of the box
+                x1 = int(i * box_width)
+                y1 = 0
+                x2 = int((i + 1) * box_width)
+                y2 = Config.STRIP_HEIGHT
+                
+                cv2.rectangle(frame, (x1, y1), (x2, y2), bgr_color, -1) # -1 for a filled box
+
         
         cv2.imshow("LIDAR + Camera View", frame)
         if cv2.waitKey(1) & 0xFF == 27: # ESC key
