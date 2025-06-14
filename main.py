@@ -1,192 +1,175 @@
 import cv2
 import numpy as np
 import threading
-from myrplidar import MyRPLidar
 import time
+from typing import Dict, Any, Tuple, List
+from picamera2 import Picamera2
+from myrplidar import MyRPLidar
 
-# --- Globals ---
-DEFAULT_X_CENTER_PX = 334           # Default X position for aligning the lidar's center
-DEFAULT_Y_CAMERA_CENTER_PX = 240    # Camera's approximate Y center 
+# --- Configuration Class ---
+class Config:
+    """Groups all static configuration variables for clarity."""
+    # Image and Camera
+    IMAGE_WIDTH = 640
+    IMAGE_HEIGHT = 480
+    IMAGE_SIZE = (IMAGE_WIDTH, IMAGE_HEIGHT)
+    
+    # LIDAR
+    LIDAR_PORT = '/dev/ttyUSB0'
+    FOV_DEGREES = 20.0
+    MIN_DISTANCE_MM = 10
+    MAX_DISTANCE_MM = 5000
+    
+    # Data Handling
+    STALE_THRESHOLD_SEC = 1.0 # Data older than this is ignored
 
-fov_angle = 20  
-image_size = (640, 480)
-min_dist = 10   # Minimum distance in mm
-max_dist = 2000 # Maximum distance in mm
+    # Parallax Correction: Y_pixel = m * distance_mm + c
+    LIDAR_Y_SLOPE = 100 / 565
+    LIDAR_Y_INTERCEPT = 213.407
 
-# New shared data structure for lidar points: dictionary + lock
-# Stores { rounded_angle_deg: {'distance': dist_mm, 'timestamp': time.monotonic()} }
-THREAD_SAFE_LIDAR_DATA = {
-    "data": {},
-    "lock": threading.Lock()
-}
+    # This determines the forward-facing direction of the lidar relative to the camera.
+    # A value of 0 means the lidar's 0° mark is dead center.
+    LIDAR_CENTER_ANGLE_DEG = 0.0
 
-# Stale data configuration
-STALE_THRESHOLD_SEC = 1.0 # Data older than this will be considered stale and reset to max_dist
 
-# --- Parallax Correction Constants ---
-# Derived from your measurements:
-# Point 1: (D1, Y1) = (235mm, 255px)
-# Point 2: (D2, Y2) = (800mm, 355px)
-# Slope (m) = (Y2 - Y1) / (D2 - D1) = (355 - 255) / (800 - 235) = 100 / 565 ≈ 0.17699115
-# Intercept (c) = Y1 - m * D1 = 255 - 0.17699115 * 235 ≈ 255 - 41.59292025 ≈ 213.40707975
-LIDAR_Y_SLOPE = 100 / 565 # Store as fraction for precision or use float directly
-LIDAR_Y_INTERCEPT = 213.40707975
+# --- Shared Data ---
+LIDAR_DATA: Dict[int, Dict[str, Any]] = {}
+LIDAR_LOCK = threading.Lock()
 
-# --- Helper for Angle Normalization (important for robust FOV checks) ---
-def normalize_angle_degrees(angle):
-    """Normalizes an angle to be within [0, 360) degrees."""
-    return angle % 360
 
-# --- Helper for checking if an angle is within a FOV ---
-def is_angle_in_fov(angle, center_angle_deg, fov):
+# --- Lidar Processing Thread ---
+def lidar_loop():
     """
-    Checks if 'angle' is within the FOV defined by 'center_angle_deg' and 'fov'.
-    Handles FOV crossing the 0/360 degree boundary.
+    Connects to the LIDAR and continuously updates the shared data structure.
+    This loop is optimized to lock only once per full scan, not per point.
     """
-    half_fov = fov / 2.0
-    norm_center_angle = normalize_angle_degrees(center_angle_deg)
-
-    min_fov_boundary = normalize_angle_degrees(norm_center_angle - half_fov)
-    max_fov_boundary = normalize_angle_degrees(norm_center_angle + half_fov)
-
-    norm_angle = normalize_angle_degrees(angle)
-
-    if min_fov_boundary <= max_fov_boundary:
-        return min_fov_boundary <= norm_angle <= max_fov_boundary
-    else:
-        return norm_angle >= min_fov_boundary or norm_angle <= max_fov_boundary
-
-# --- Get Filtered Lidar Points for Drawing ---
-def get_filtered_lidar_points(lidar_data_dict, center_angle_deg, image_width):
-    """
-    Transforms the dictionary of lidar data into (x_screen, distance) pairs
-    for drawing, considering the current FOV.
-    """
-    result = []
-    fov = fov_angle
-    half_fov = fov / 2.0
-    norm_center_angle = normalize_angle_degrees(center_angle_deg)
-
-    for angle_deg_rounded, data_point in lidar_data_dict.items():
-        distance = data_point['distance']
-
-        if is_angle_in_fov(angle_deg_rounded, norm_center_angle, fov):
-            # Calculate the angular difference relative to the center of the FOV
-            angular_diff = normalize_angle_degrees(angle_deg_rounded - norm_center_angle + 180) - 180
-
-            # Map this relative angle [-half_fov, +half_fov] to screen x [0, image_width]
-            x_screen = int(((angular_diff + half_fov) / fov) * image_width)
-            result.append((x_screen, distance))
-    return result
-
-# --- Drawing Overlay ---
-def draw_lidar_overlay(frame, lidar_data_dict_for_drawing, center_angle_deg):
-    width, height = frame.shape[1], frame.shape[0]
-    points = get_filtered_lidar_points(lidar_data_dict_for_drawing, center_angle_deg, width)
-
-    for x, dist in points:
-        if 0 <= x < width:
-            # Calculate Y position based on distance (parallax correction)
-            y_pixel = int(LIDAR_Y_SLOPE * dist + LIDAR_Y_INTERCEPT)
-            # Clip Y to stay within image bounds
-            y_pixel = np.clip(y_pixel, 0, height - 1)
-
-            # Normalize distance for color mapping
-            norm = np.clip((dist - min_dist) / (max_dist - min_dist), 0, 1)
-            red = int((1 - norm) * 255)
-            green = int(norm * 255)
-            color = (0, green, red)  # BGR
-            
-            cv2.circle(frame, (x, y_pixel), 2, color, -1) # Use the calculated y_pixel
-
-# --- Camera Loop (Main Thread) ---
-def camera_loop(initial_center_angle): # Parameter name changed for clarity
-    print("Camera loop starting...")
-
-    from picamera2 import Picamera2
-    picam2 = Picamera2()
-    config = picam2.create_video_configuration(main={"size": image_size})
-    picam2.configure(config)
-    picam2.start()
-    time.sleep(1)
-
-    cv2.namedWindow("LIDAR + Camera View")
-
-    while True:
-        try:
-            frame = picam2.capture_array()
-            frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
-
-            current_lidar_data_for_drawing = {}
-            current_time = time.monotonic()
-
-            with THREAD_SAFE_LIDAR_DATA["lock"]:
-                angles_to_remove = []
-                for angle, data in THREAD_SAFE_LIDAR_DATA["data"].items():
-                    if (current_time - data['timestamp']) > STALE_THRESHOLD_SEC:
-                        current_lidar_data_for_drawing[angle] = {'distance': max_dist, 'timestamp': current_time}
-                    else:
-                        current_lidar_data_for_drawing[angle] = data
-
-            draw_lidar_overlay(frame, current_lidar_data_for_drawing, initial_center_angle)
-            cv2.imshow("LIDAR + Camera View", frame)
-
-            key = cv2.waitKey(1) & 0xFF
-            if key == 27:
-                break
-        except Exception as e:
-            print(f"Error in camera loop: {e}")
-            break
-
-    print("Stopping camera...")
-    picam2.stop()
-    cv2.destroyAllWindows()
-
-# --- Lidar Loop (Separate Thread) ---
-def lidar_loop(): 
     print("Starting LIDAR thread...")
-    PORT = '/dev/ttyUSB0'
     lidar = None
-
     try:
-        lidar = MyRPLidar(PORT)
+        lidar = MyRPLidar(Config.LIDAR_PORT)
         print("LIDAR connected and motor started.")
 
         for scan in lidar:
+            # Process a full scan into a temporary dictionary first
+            scan_data = {}
             for quality, angle, distance in scan:
-                if distance < min_dist or distance > max_dist or quality < 0:
+                if not (Config.MIN_DISTANCE_MM < distance < Config.MAX_DISTANCE_MM and quality > 1):
                     continue
+                
+                # Round angle to nearest integer for dictionary key
+                rounded_angle = int(angle + 0.5) % 360
+                scan_data[rounded_angle] = {
+                    'distance': distance,
+                    'timestamp': time.monotonic()
+                }
 
-                rounded_angle = round(angle) % 360
-
-                with THREAD_SAFE_LIDAR_DATA["lock"]:
-                    THREAD_SAFE_LIDAR_DATA["data"][rounded_angle] = {
-                        'distance': distance,
-                        'timestamp': time.monotonic()
-                    }
+            # Now, acquire the lock ONCE and update the main dictionary
+            if scan_data:
+                with LIDAR_LOCK:
+                    LIDAR_DATA.update(scan_data)
 
     except Exception as e:
         print(f"LIDAR Error: {e}")
     finally:
         print("Shutting down LIDAR...")
         if lidar:
-            try:
-                del lidar
-                print("LIDAR cleanup complete.")
-            except Exception as e:
-                print(f"LIDAR cleanup failed: {e}")
+            del lidar # Rely on the destructor to stop motor and disconnect
 
-# --- Main Execution ---
+# --- Main Application Thread (Camera and Drawing) ---
+def get_fov_points(center_angle: float, fov: float) -> List[int]:
+    """Calculates the integer angles within the specified Field of View."""
+    half_fov = fov / 2.0
+    
+    # Calculate start and end angles, handling the 0/360 wrap-around
+    start_angle = (center_angle - half_fov)
+    end_angle = (center_angle + half_fov)
+
+    angles = []
+    # Handle wrap-around case (e.g., center=5, fov=20 -> range 355 to 15)
+    if start_angle < 0:
+        angles.extend(range(int(360 + start_angle), 360))
+        start_angle = 0
+        
+    if end_angle > 360:
+        angles.extend(range(0, int(end_angle % 360) + 1))
+        end_angle = 360
+
+    angles.extend(range(int(start_angle), int(end_angle) + 1))
+    return sorted(list(set(angles))) # Return unique, sorted list
+
+
+def main_loop():
+    """
+    Handles camera capture, data processing, and visualization.
+    """
+    print("Camera loop starting...")
+    picam2 = Picamera2()
+    config = picam2.create_video_configuration(main={"size": Config.IMAGE_SIZE})
+    picam2.configure(config)
+    picam2.start()
+    time.sleep(1.0) # Allow camera to warm up
+
+    cv2.namedWindow("LIDAR + Camera View")
+
+    # Pre-calculate the angles we care about
+    fov_angles_to_check = get_fov_points(Config.LIDAR_CENTER_ANGLE_DEG, Config.FOV_DEGREES)
+
+    while True:
+        frame = picam2.capture_array()
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+        
+        current_time = time.monotonic()
+        points_to_draw = []
+
+        # --- Efficiently get and process data ---
+        with LIDAR_LOCK:
+            for angle_deg in fov_angles_to_check:
+                data_point = LIDAR_DATA.get(angle_deg)
+
+                # Check if point exists and is not stale
+                if data_point and (current_time - data_point['timestamp']) < Config.STALE_THRESHOLD_SEC:
+                    dist = data_point['distance']
+                    
+                    # Map angle to screen X coordinate
+                    # Normalize angle diff from -half_fov to +half_fov
+                    angular_diff = (angle_deg - Config.LIDAR_CENTER_ANGLE_DEG + 180) % 360 - 180
+                    x_screen = int(
+                        ((angular_diff + Config.FOV_DEGREES / 2) / Config.FOV_DEGREES) * Config.IMAGE_WIDTH
+                    )
+
+                    # Calculate Y with parallax correction
+                    y_screen = int(Config.LIDAR_Y_SLOPE * dist + Config.LIDAR_Y_INTERCEPT)
+                    
+                    points_to_draw.append(((x_screen, y_screen), dist))
+
+        # --- Drawing Loop (Lock is released) ---
+        for (x, y), dist in points_to_draw:
+            if 0 <= x < Config.IMAGE_WIDTH:
+                # Clip Y to stay within frame
+                y_clipped = np.clip(y, 0, Config.IMAGE_HEIGHT - 1)
+                
+                # Color mapping based on distance
+                norm = np.clip((dist - Config.MIN_DISTANCE_MM) / (Config.MAX_DISTANCE_MM - Config.MIN_DISTANCE_MM), 0, 1)
+                color = (0, int(norm * 255), int((1 - norm) * 255)) # BGR: Green (close) to Red (far)
+
+                cv2.circle(frame, (x, y_clipped), 3, color, -1)
+        
+        cv2.imshow("LIDAR + Camera View", frame)
+        if cv2.waitKey(1) & 0xFF == 27: # ESC key
+            break
+
+    print("Stopping camera...")
+    picam2.stop()
+    cv2.destroyAllWindows()
+
+
 if __name__ == '__main__':
-    # Initialize the shared dictionary with max_dist for all angles initially
-    for i in range(360):
-        THREAD_SAFE_LIDAR_DATA["data"][i] = {'distance': max_dist, 'timestamp': time.monotonic()}
-
-    x_ratio = (DEFAULT_X_CENTER_PX / image_size[0]) - 0.5
-    initial_center_angle = (-x_ratio * fov_angle * 2) % 360
-
-    lidar_thread = threading.Thread(target=lidar_loop, daemon=True) 
+    # Start the lidar thread as a daemon so it exits with the main thread
+    lidar_thread = threading.Thread(target=lidar_loop, daemon=True)
     lidar_thread.start()
 
+    # Give the lidar a moment to connect and gather initial data
+    print("Waiting for initial LIDAR scan...")
     time.sleep(2)
-    camera_loop(initial_center_angle) 
+    
+    main_loop()
