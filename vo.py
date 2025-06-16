@@ -20,8 +20,8 @@ class Config:
     # For a Raspberry Pi Camera Module v2, these are reasonable starting points
     FOCAL_LENGTH_X = 650.0 # Focal length in pixels
     FOCAL_LENGTH_Y = 650.0
-    PRINCIPAL_POINT_X = Config.IMAGE_WIDTH / 2
-    PRINCIPAL_POINT_Y = Config.IMAGE_HEIGHT / 2
+    PRINCIPAL_POINT_X = IMAGE_WIDTH / 2
+    PRINCIPAL_POINT_Y = IMAGE_HEIGHT / 2
     CAMERA_MATRIX = np.array([
         [FOCAL_LENGTH_X, 0, PRINCIPAL_POINT_X],
         [0, FOCAL_LENGTH_Y, PRINCIPAL_POINT_Y],
@@ -177,11 +177,11 @@ def main_loop():
 
                 # 3. Estimate Camera Motion (Essential Matrix)
                 # K is the camera intrinsic matrix
-                E, mask = cv2.findEssentialMat(curr_pts, prev_pts, CAMERA_MATRIX, method=cv2.RANSAC, prob=0.999, threshold=1.0)
+                E, mask = cv2.findEssentialMat(curr_pts, prev_pts, Config.CAMERA_MATRIX, method=cv2.RANSAC, prob=0.999, threshold=1.0)
                 
                 if E is not None:
                     # Decompose the Essential Matrix to get Rotation (R) and Translation (t)
-                    _, R_cam, t_cam, mask = cv2.recoverPose(E, curr_pts, prev_pts, cameraMatrix=CAMERA_MATRIX, mask=mask)
+                    _, R_cam, t_cam, mask = cv2.recoverPose(E, curr_pts, prev_pts, cameraMatrix=Config.CAMERA_MATRIX, mask=mask)
 
                     # 4. Update Global Pose
                     # Note: t_cam is a unit vector. Absolute scale is unknown.
@@ -189,21 +189,21 @@ def main_loop():
                     global_R = global_R @ R_cam
                     global_t = global_t + global_R @ t_cam
                     
-                    # For visualization, draw the trajectory (optional)
                     # This part can be expanded to store and draw the full path
-                    # print(f"Global Position: {global_t.flatten()}")
+                    print(f"Global Position: {global_t.flatten()}")
 
         # Update the previous frame's data for the next iteration
         prev_gray = gray
         prev_kps = kps
         prev_des = des
+
+       
         
         current_time = time.monotonic()
         points_to_draw = []
         
         # Initialize preview_colors with a default "no data" color (e.g., black)
         preview_colors = [(0, 0, 0)] * Config.NUM_COLOR_STRIP_SEGMENTS # BGR black
-
 
         # --- Get and process data ---
         with LIDAR_LOCK:
