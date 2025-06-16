@@ -64,7 +64,8 @@ def lidar_loop():
                 if not (Config.MIN_DISTANCE_MM < distance < Config.MAX_DISTANCE_MM and quality > 1):
                     continue
                 
-                # Round angle to nearest integer for dictionary key
+                # Round angle to nearest integer for dictionary key 
+                # angle+0.5 ensures round off, not floor
                 rounded_angle = int(angle + 0.5) % 360
                 scan_data[rounded_angle] = {
                     'distance': distance,
