@@ -15,15 +15,31 @@ output_dir = "calib_images"
 os.makedirs(output_dir, exist_ok=True)
 
 print("Starting image capture...")
-for i in range(20):
+
+print("Press 'q' to quit early.")
+print("Preview running, capturing an image every 5 seconds...")
+
+num_images = 10
+capture_interval = 5  # seconds
+captured = 0
+last_capture_time = time.time()
+
+while captured < num_images:
     frame = picam2.capture_array()
-    filename = os.path.join(output_dir, f"chessboard_{i:02}.jpg")
-    cv2.imwrite(filename, frame)
-    print(f"[{i+1}/20] Saved {filename}")
-    cv2.imshow("Preview", frame)
-    if cv2.waitKey(1000) == ord('q'):
+    cv2.imshow("Live Preview", frame)
+
+    key = cv2.waitKey(1)
+    if key == ord('q'):
+        print("Early exit.")
         break
-    time.sleep(5)
+
+    current_time = time.time()
+    if current_time - last_capture_time >= capture_interval:
+        filename = os.path.join(output_dir, f"chessboard_{captured:02}.jpg")
+        cv2.imwrite(filename, frame)
+        print(f"[{captured+1}/{num_images}] Saved {filename}")
+        captured += 1
+        last_capture_time = current_time
 
 cv2.destroyAllWindows()
 picam2.stop()
@@ -31,8 +47,8 @@ picam2.stop()
 # ==== 2. CAMERA CALIBRATION ====
 print("Starting calibration...")
 
-# Chessboard dimensions (adjust if needed)
-chessboard_size = (11, 8)
+# Chessboard dimensions
+chessboard_size = (7, 10)
 frame_size = (640, 480)
 
 # Prepare object points like (0,0,0), (1,0,0), ..., (8,5,0)
@@ -57,7 +73,7 @@ for fname in images:
         cv2.imshow("Detected Corners", img)
         cv2.waitKey(500)
     else:
-        print(f"⚠️ Chessboard not found in {fname}")
+        print(f"!! Chessboard not found in {fname}")
 
 cv2.destroyAllWindows()
 
@@ -70,7 +86,6 @@ if len(objpoints) >= 5:
     print("Camera Matrix:\n", camera_matrix)
     print("\nDistortion Coefficients:\n", dist_coeffs.ravel())
 
-    # Optionally save to file
     np.savez("calibration_data.npz",
              camera_matrix=camera_matrix,
              dist_coeffs=dist_coeffs)
