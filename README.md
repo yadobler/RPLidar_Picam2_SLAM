@@ -36,6 +36,7 @@ cd RPLidar_Picam2_SLAM
 
 ```
 .
+├── COLMAP                  - Folder containing colmap and SfM scripts
 ├── LIDAR + Camera.png      - Calibration Test 1 
 ├── LIDAR + Camera_2.png    - Calibration Test 2
 ├── RPLidar Scan.png        - Example output of running myrplidar.py 
