@@ -3,3 +3,4 @@ __pycache__
 log
 pyvenv.cfg
 SfM/calib_images
+SfM/test_colmap
